@@ -1,0 +1,683 @@
+---
+title: "R Notebook"
+output:
+  pdf_document: default
+  html_notebook: default
+---
+Brain-Computer Interaction:
+
+```{r}
+library(caret)
+library(lattice)
+library(ggplot2)
+library(RSNNS)
+library(kernlab)
+
+
+library (e1071)
+library(MASS)
+library (class)
+library(nnet)
+library(randomForest)
+
+set.seed(1111)
+```
+
+##Section 1: Preprocess data
+
+Functions to preprocess the data
+```{r}
+subject.nzv <- function(subject.predictors)
+{
+  nzv <- nearZeroVar(subject.predictors)
+  print(paste0("Variables that their variance are almost zero: ", nzv))
+  if(length(nzv) > 0){
+    subject.predictors <- subject.predictors[, -nzv]
+  }
+  return(subject.predictors)
+  
+}
+
+subject.highlyCor <- function(subject.predictors)
+{
+  descrCor <-  cor(subject.predictors)
+  highlyCorDescr <- findCorrelation(descrCor, cutoff = .95)
+  
+  print(sort(highlyCorDescr))
+  print(paste0("Variables that that are highly correlated: ", highlyCorDescr))
+  if(length(highlyCorDescr) > 0)
+  {
+    subject.predictors <- subject.predictors[,-highlyCorDescr]
+  }
+  return(subject.predictors)
+  
+}
+
+subject.linearCombos <- function(subject.predictors)
+{
+  comboInfo <- findLinearCombos(subject.predictors)
+  print(paste0("columns positions can be removed to eliminate the linear dependencies: ",comboInfo))
+  if(! is.null(comboInfo$remove)){
+   subject.predictors <- subject.predictors[, -comboInfo$remove]
+  }
+
+  return(subject.predictors)
+  
+}
+
+subject.preprocess<- function(subject.predictors)
+  
+{
+  subject.predictors<-subject.nzv(subject.predictors)
+  subject.predictors<-subject.highlyCor(subject.predictors)
+  subject.predictors<-subject.linearCombos(subject.predictors)
+  return(subject.predictors)
+}
+
+
+
+subject.nzv.return <- function(subject.predictors)
+{
+  nzv <- nearZeroVar(subject.predictors)
+  print(paste("Variables that their variance are almost zero: ", nzv))
+  return(nzv)
+  
+}
+
+subject.highlyCor.return <- function(subject.predictors,cutoff)
+{
+  descrCor <-  cor(subject.predictors)
+  highlyCorDescr <- findCorrelation(descrCor, cutoff = cutoff)
+  print(paste("Variables that that are highly correlated: ", highlyCorDescr))
+  return(highlyCorDescr)
+  
+}
+
+subject.linearCombos.return <- function(subject.predictors)
+{
+  comboInfo <- findLinearCombos(subject.predictors)
+  print(paste("columns positions can be removed to eliminate the linear dependencies: ",comboInfo))
+  return(comboInfo$remove)
+  
+}
+
+subject.preprocess.remove<- function(subject.predictors,cutoff)
+  
+{
+  
+  remove<-subject.nzv.return(subject.predictors)
+  remove<-c(remove,subject.highlyCor.return(subject.predictors,cutoff))
+  remove<-c(remove,subject.linearCombos.return(subject.predictors))
+  return(sort(remove))
+}
+
+
+
+refactor <-function(subject_psa){
+  
+  output <- matrix(ncol=9, nrow=dim(subject_psa)[1])
+
+  x <- 1
+  eegData <- c('C3', 'Cz', 'C4', 'CP1', 'CP2', 'P3', 'Pz', 'P4','Target')
+  newVector <- data.frame()
+  
+  for (id in 1:8)
+  {
+    y <- x+11
+    output[,id] <- rowMeans(subject_psa[,x:y])
+    x<-y+1
+    
+    
+  }
+  output[,9] <- subject_psa[,97]
+  output <- data.frame(output)
+  colnames(output) <- make.names(eegData)
+  return(output)
+}
+
+```
+
+
+Preprocess for psd data:
+```{r}
+subject1_1psd <- read.table("data_psd/train_subject1_psd01.asc", header = FALSE,  dec = ".")
+subject1_2psd <- read.table("data_psd/train_subject1_psd02.asc", header = FALSE,  dec = ".")
+subject1_3psd <- read.table("data_psd/train_subject1_psd03.asc", header = FALSE,  dec = ".")
+
+subject1_psd <- rbind(subject1_1psd,subject1_2psd)
+subject1_psd <- rbind(subject1_psd,subject1_3psd)
+subject1_psd.refactor <-refactor(subject1_psd)
+
+
+subject2_1psd <- read.table("data_psd/train_subject2_psd01.asc", header = FALSE,  dec = ".")
+subject2_2psd <- read.table("data_psd/train_subject2_psd02.asc", header = FALSE,  dec = ".")
+subject2_3psd <- read.table("data_psd/train_subject2_psd03.asc", header = FALSE,  dec = ".")
+
+subject2_psd <- rbind(subject2_1psd,subject2_2psd)
+subject2_psd <- rbind(subject2_psd,subject2_3psd)
+subject2_psd.refactor <-refactor(subject2_psd)
+
+subject3_1psd <- read.table("data_psd/train_subject3_psd01.asc", header = FALSE,  dec = ".")
+subject3_2psd <- read.table("data_psd/train_subject3_psd02.asc", header = FALSE,  dec = ".")
+subject3_3psd <- read.table("data_psd/train_subject3_psd03.asc", header = FALSE,  dec = ".")
+
+
+subject3_psd <- rbind(subject3_1psd,subject3_2psd)
+subject3_psd <- rbind(subject3_psd,subject3_3psd)
+subject3_psd.refactor <-refactor(subject3_psd)
+
+maxVarBefore <- dim(subject1_psd.refactor)[2]
+cutoff <- 0.7
+subject1_psd.variablesDelete<-subject.preprocess.remove(subject1_psd.refactor[,1:(maxVarBefore-1)],cutoff)
+
+if(length(subject1_psd.variablesDelete)>0){
+  subject1_psd.refactor <- subject1_psd.refactor[,-subject1_psd.variablesDelete]
+  subject2_psd.refactor <- subject2_psd.refactor[,-subject1_psd.variablesDelete]
+  subject3_psd.refactor <- subject3_psd.refactor[,-subject1_psd.variablesDelete]
+}
+maxVarBefore <- dim(subject1_psd.refactor)[2]
+subject2_psd.variablesDelete<-subject.preprocess.remove(subject2_psd.refactor[,1:(maxVarBefore-1)],cutoff)
+if(length(subject2_psd.variablesDelete)>0){
+subject1_psd.refactor <- subject1_psd.refactor[,-subject2_psd.variablesDelete]
+subject2_psd.refactor <- subject2_psd.refactor[,-subject2_psd.variablesDelete]
+subject3_psd.refactor <- subject3_psd.refactor[,-subject2_psd.variablesDelete]
+}
+maxVarBefore <- dim(subject3_psd.refactor)[2]
+subject3_psd.variablesDelete<-subject.preprocess.remove(subject3_psd.refactor[,1:(maxVarBefore-1)],cutoff)
+
+if(length(subject3_psd.variablesDelete)>0){
+subject1_psd.refactor <- subject1_psd.refactor[,-subject3_psd.variablesDelete]
+subject2_psd.refactor <- subject2_psd.refactor[,-subject3_psd.variablesDelete]
+subject3_psd.refactor <- subject3_psd.refactor[,-subject3_psd.variablesDelete]
+}
+
+print(paste("subject  1: ",subject1_psd.variablesDelete ))
+print(paste("subject  2: ",subject2_psd.variablesDelete ))
+print(paste("subject  3: ",subject3_psd.variablesDelete ))
+
+
+```
+Preprocess for  row data:
+```{r}
+
+subject1_1raw <- read.table("subject1/train_subject1_raw01.asc", header = FALSE,  dec = ".")
+subject1_2raw <- read.table("subject1/train_subject1_raw02.asc", header = FALSE,  dec = ".")
+subject1_3raw <- read.table("subject1/train_subject1_raw03.asc", header = FALSE,  dec = ".")
+
+
+subject1_raw <- rbind(subject1_1raw,subject1_2raw)
+subject1_raw <- rbind(subject1_raw,subject1_3raw)
+
+
+subject2_1raw <- read.table("subject2/train_subject2_raw01.asc", header = FALSE,  dec = ".")
+subject2_2raw <- read.table("subject2/train_subject2_raw02.asc", header = FALSE,  dec = ".")
+subject2_3raw <- read.table("subject2/train_subject2_raw03.asc", header = FALSE,  dec = ".")
+
+
+subject2_raw <- rbind(subject2_1raw,subject2_2raw)
+subject2_raw <- rbind(subject2_raw,subject2_3raw)
+
+subject3_1raw <- read.table("subject3/train_subject3_raw01.asc", header = FALSE,  dec = ".")
+subject3_2raw <- read.table("subject3/train_subject3_raw02.asc", header = FALSE,  dec = ".")
+subject3_3raw <- read.table("subject3/train_subject3_raw03.asc", header = FALSE,  dec = ".")
+
+
+subject3_raw <- rbind(subject3_1raw,subject3_2raw)
+subject3_raw <- rbind(subject3_raw,subject3_3raw)
+
+maxVarBefore <- dim(subject3_raw)[2]
+cutoff <- 0.98
+subject1_raw.variablesDelete<-subject.preprocess.remove(subject1_raw[,1:(maxVarBefore-1)],cutoff)
+
+if(length(subject1_raw.variablesDelete)>0){
+subject1_raw <- subject1_raw[,-subject1_raw.variablesDelete]
+subject2_raw <- subject2_raw[,-subject1_raw.variablesDelete]
+subject3_raw <- subject3_raw[,-subject1_raw.variablesDelete]
+}
+maxVarBefore <- dim(subject3_raw)[2]
+subject2_raw.variablesDelete<-subject.preprocess.remove(subject2_raw[,1:(maxVarBefore-1)],cutoff)
+
+if(length(subject2_raw.variablesDelete)>0){
+subject1_raw <- subject1_raw[,-subject2_raw.variablesDelete]
+subject2_raw <- subject2_raw[,-subject2_raw.variablesDelete]
+subject3_raw <- subject3_raw[,-subject2_raw.variablesDelete]
+}
+maxVarBefore <- dim(subject3_raw)[2]
+
+subject3_raw.variablesDelete<-subject.preprocess.remove(subject3_raw[,1:(maxVarBefore-1)],cutoff)
+
+if(length(subject3_raw.variablesDelete)>0){
+subject1_raw <- subject1_raw[,-subject3_raw.variablesDelete]
+subject2_raw <- subject2_raw[,-subject3_raw.variablesDelete]
+subject3_raw <- subject3_raw[,-subject3_raw.variablesDelete]
+}
+
+print(paste("subject  1: ",subject1_raw.variablesDelete ))
+print(paste("subject  2: ",subject2_raw.variablesDelete ))
+print(paste("subject  3: ",subject3_raw.variablesDelete ))
+
+
+
+```
+
+##Section 2: Linear methods
+
+Linear Functions: (LDA,QDA,Naive Bayes)
+```{r}
+subject.10foldCV.linear <- function(yourData,numClassify,maxVar)
+{
+  print("start foldCV")
+  yourData<-yourData[sample(nrow(yourData)),]
+  
+  folds <- cut(seq(1,nrow(yourData)),breaks=10,labels=FALSE)
+  errorRate <-0
+  #Perform 10 fold cross validation
+  for(i in 1:10){
+      testIndexes <- which(folds==i,arr.ind=TRUE)
+      newErrorRate <- subject.get.iteration.linear(numClassify,yourData,maxVar,testIndexes)
+      errorRate <- errorRate + newErrorRate
+  }
+  print("finish foldCV")
+  return(errorRate/10)
+}
+
+
+subject.TrainTest.linear <- function(yourData,numClassify,maxVar)
+{
+  yourData<-yourData[sample(nrow(yourData)),]
+  subject.learn <- subject.get.learner(yourData,maxVar)
+  errorRate <- subject.get.iteration.linear(numClassify,yourData,maxVar,subject.learn)
+  return(errorRate)
+}
+subject.get.iteration.linear <- function(number,subject,maxVar,subject.learn)
+{
+  dataTrain <- subject[subject.learn,]
+  classifier <- subject.get.classifier.linear(number,dataTrain,maxVar)
+  errorRate <- subject.errorRate(number,subject,classifier,maxVar,subject.learn)
+  return(errorRate)
+}
+
+
+subject.errorRate <- function(number,subject,subject.model,maxVar,subject.learn){
+  ntrain <- length(subject.learn)
+  ntest <-  dim(subject[-subject.learn,])[1]
+
+    subject.predTest <- predict(subject.model, subject[-subject.learn,1:maxVar])
+    if(number ==3 ){subject.resultsTest <- table(subject.predTest, subject[-subject.learn,(maxVar+1)]) }
+    else{subject.resultsTest <- table(subject.predTest$class, subject[-subject.learn,(maxVar+1)]) }
+  
+  subject.errorRate.Test <- 1-(sum(diag(subject.resultsTest))/ntest)
+  return(subject.errorRate.Test)
+  
+}
+
+subject.get.classifier.linear<- function(number,subject,maxVar)
+{
+if(number == 1){method<- subject.get.lda(subject,maxVar)}
+  else if(number == 2){method<- subject.get.qda(subject,maxVar)}
+  else if(number==3){method<- subject.get.naiveBayes(subject,maxVar)} 
+  
+  return(method)
+}
+
+
+subject.get.message.method.linear<- function(number)
+{
+if(number == 1){message<- "LDA "}
+  else if(number == 2){message<- " QDA "}
+  else if(number==3){message<-" Naive Bayes"} 
+  
+  return(message)
+}
+
+
+
+subject.get.lda <- function(subject,maxVar)
+{
+  subject.model <- lda (x=subject[,1:maxVar], grouping=subject[,(maxVar+1)])
+  return(subject.model)
+} 
+
+subject.get.qda <- function(subject,maxVar)
+{
+  subject.model <- qda (x=subject[,1:maxVar], grouping=subject[,(maxVar+1)])
+  return(subject.model)
+}
+
+subject.get.naiveBayes <- function(subject,maxVar)
+{
+  subject.model <- naiveBayes(subject[,(maxVar+1)] ~ ., data =subject[,1:maxVar])
+  return(subject.model)
+}
+subject.get.learner <- function(subject,maxVar)
+{
+  
+  N <- nrow(subject)
+  subject.learn <- sample(1:N, round(2*N/3))
+  return(subject.learn)
+}
+
+subject.linearMethod <- function(subject,nameSubject)
+{
+ 
+  maxVar <- dim(subject)[2]-1
+  subject[,(maxVar+1)] <- as.factor(subject[,(maxVar+1)])
+    
+    for( numberMethod in 1:3){
+     
+     messageMethod <-subject.get.message.method.linear(numberMethod)
+     subject.error.10foldCV<- subject.10foldCV.linear (subject,numberMethod,maxVar)
+     subject.error.TrainTest <- subject.TrainTest.linear(subject,numberMethod,maxVar)
+     
+     message <- paste("subject ", nameSubject , "using classifier ", messageMethod, " with 10foldCV ", subject.error.10foldCV, " with TrainTest resampling ", subject.error.TrainTest)
+     print(message)
+
+    }
+  
+
+}
+
+
+```
+Linear methods for all the subjects
+```{r}
+
+subject.linearMethod(subject1_psd.refactor,"1 with psd data")
+subject.linearMethod(subject2_psd.refactor,"2 with psd data")
+subject.linearMethod(subject3_psd.refactor,"3 with psd data")
+
+subject.linearMethod(subject1_raw,"1 with raw data")
+subject.linearMethod(subject2_raw,"2 with raw data")
+subject.linearMethod(subject3_raw,"3 with raw data")
+```
+
+KNN functions:
+
+```{r}
+
+subject.get.knn <- function(subject,maxVar,learn,k)
+{
+  subject.model <-  knn (subject[learn,1:maxVar],subject[-learn,1:maxVar] ,subject[learn,(maxVar+1)],k=k,prob=TRUE)
+  return(subject.model)
+}
+
+
+
+subject.errorRate.KNN <- function(subject,subject.model,maxVar,subject.learn){
+  ntrain <- length(subject.learn)
+  ntest <-  dim(subject[-subject.learn,])[1]
+
+   subject.resultsTest <- table(subject.model, subject[-subject.learn,(maxVar+1)]) 
+  subject.errorRate.Test <- 1-(sum(diag(subject.resultsTest))/ntest)
+  return(subject.errorRate.Test)
+  
+}
+
+
+subject.get.iteration.knn <- function(subject,maxVar,subject.learn,k)
+{
+  classifier <- subject.get.knn(subject,maxVar,subject.learn,k)
+  errorRate <- subject.errorRate.KNN(subject,classifier,maxVar,subject.learn)
+  return(errorRate)
+}
+
+
+subject.10foldCV.knn <- function(yourData,maxVar,k)
+{
+  print("start foldCV")
+  yourData<-yourData[sample(nrow(yourData)),]
+  
+  folds <- cut(seq(1,nrow(yourData)),breaks=10,labels=FALSE)
+  errorRate <-0
+  #Perform 10 fold cross validation
+  for(i in 1:10){
+      testIndexes <- which(folds==i,arr.ind=TRUE)
+      newErrorRate <- subject.get.iteration.knn(yourData,maxVar,testIndexes,k)
+      errorRate <- errorRate + newErrorRate
+  }
+  print("finish foldCV")
+  return(errorRate/10)
+}
+
+
+subject.TrainTest.knn <- function(yourData,maxVar,k)
+{
+  yourData<-yourData[sample(nrow(yourData)),]
+  subject.learn <- subject.get.learner(yourData,maxVar)
+  errorRate <- subject.get.iteration.knn(yourData,maxVar,subject.learn,k)
+  return(errorRate)
+}
+
+subject.findk.KNN <- function(trainData,maxVar,learner)
+{
+  leastK<-0
+  errorRate <- 10000
+  for(k in seq(1,20,3))
+  {
+    
+    newErrorRate <- subject.10foldCV.knn(trainData,maxVar,k)
+    if(newErrorRate < errorRate)
+    {
+      errorRate <- newErrorRate
+      leastK <- k
+    }
+    print(paste0("iteration k: ",k," errorRate ", errorRate))
+    
+  }
+  return(leastK)
+  
+}
+
+
+subject.KNNMethod <- function(subject,nameSubject)
+{
+ 
+  maxVar <- dim(subject)[2]-1
+  subject[,(maxVar+1)] <- as.factor(subject[,(maxVar+1)])
+  learner <- subject.get.learner(subject,maxVar)
+  trainData <- subject[learner,]
+  k<-subject.findk.KNN(trainData,maxVar,learner)
+  errorRate <- subject.get.iteration.knn(subject,maxVar,learner,k)
+  message <- paste("subject ", nameSubject , "using classifier KNN with k ",    k, " with 10x10 Fold CV for ressampling. The error rate in test is ", errorRate)
+  print(message)
+
+  
+}
+
+```
+KNN function for all the methods
+```{r}
+subject.KNNMethod(subject1_raw,"1 with raw data")
+subject.KNNMethod(subject2_raw,"2 with raw data")
+subject.KNNMethod(subject3_raw,"3 with raw data")
+
+subject.KNNMethod(subject1_psd.refactor,"1 with psd data")
+subject.KNNMethod(subject2_psd.refactor,"2 with psd data")
+subject.KNNMethod(subject3_psd.refactor,"3 with psd data")
+```
+
+
+Set up a diferent seed for non linear methods
+```{r}
+set.seed (4567)
+```
+Non-linear functions:
+```{r}
+subject.get.train<- function(number)
+{
+  if(number ==1){tr<- trainControl(method="LGOCV")}
+  
+  else if(number == 2)  {tr<- trainControl (method="repeatedcv", number=10, repeats=3)}  
+  else if(number==3){tr<- trainControl(method="cv", number=2)} 
+
+       
+  return(tr)
+}
+
+subject.get.message.train<- function(number)
+{
+
+  if(number ==1){message<- "LGOCV"}
+  else if(number == 2)  {message<- "repeatcv resampling 10 folds and 3 repeats"}   
+  else if(number==3){message <- "cv resampling 10 folds"} 
+       
+  return(message)
+}
+
+
+subject.get.method <- function(number,subject,maxVar,trc)
+{
+  if(number == 1){method<-subject.get.method.resample.RBFKernel(subject,maxVar,trc)}
+  else if(number==2){method<- subject.get.method.resample.MLP(subject,maxVar,trc)} 
+  else if(number == 3){method<- subject.get.method.resample.RandomForest(subject,maxVar,trc)}
+  else {method<- subject.get.method.resample.RBFNN(subject,maxVar,trc)}   
+  return(method)
+}
+
+
+
+
+subject.get.message.method<- function(number)
+{
+
+  if(number==1){message <- "RBFKernel "} 
+  else if(number == 2)  {message<- " MLP "}   
+  else if(number ==3){message<- "Random Forest "}
+  else {message<- "RBFNN "}
+       
+  return(message)
+}
+
+```
+Non linear functions for printing messages
+```{r}
+subject.get.message.from.bestTune<- function(number,bestTune)
+{
+
+  if(number==1){message <- subject.get.message.RBFKernel.from.bestTune(bestTune)} 
+  else if(number == 2)  {message<- subject.get.message.MLP.from.bestTune(bestTune)}   
+  else if(number ==3){message<- subject.get.message.RandomForest.from.bestTune(bestTune)}
+  else {message<- subject.get.message.RBFNN.from.bestTune(bestTune)}
+       
+  return(message)
+}
+subject.get.message.MLP.from.bestTune <- function(bestTune)
+{
+  message <- paste(" size : ",bestTune["size"]," and decay: ", bestTune["decay"])
+  return(message)
+
+    
+}
+
+subject.get.message.RBFNN.from.bestTune <- function(bestTune)
+{
+  message <- paste(" size : ",bestTune["size"])
+  return(message)
+    
+  
+}
+
+subject.get.message.RandomForest.from.bestTune <- function(bestTune)
+{
+  message <- paste(" mtry : ",bestTune["mtry"])
+  return(message)
+  
+}
+
+subject.get.message.RBFKernel.from.bestTune <- function(bestTune)
+{
+  message <- paste(" C : ",bestTune["C"]," and sigma: ", bestTune["sigma"])
+  return(message)
+}
+
+
+subject.resultsNN <- function(subject,subject.model,maxVar,subject.learn){
+  ntrain <- length(subject.learn)
+  ntest <-  dim(subject[-subject.learn,])[1]
+
+  
+  p2 <- as.factor(predict (subject.model, newdata=subject[-subject.learn,1:maxVar], type="raw"))
+  subject.resultsTest <- table(p2,subject[-subject.learn,(maxVar+1)])
+  subject.errorRate.Test <- 1-(sum(diag(subject.resultsTest))/ntest)
+  return(subject.errorRate.Test)
+
+}
+```
+
+```{r}
+subject.get.method.resample.MLP<- function(subject,maxVar,trc)
+{
+  sizes <- 2*seq(1,10,by=1)
+  decays <- c(0.0001,0.001,0.01,0.1,1)
+  
+  
+  model.10x10CV <- caret::train (y=subject[,(maxVar+1)] ,x=  subject[,1:maxVar],method='nnet', maxit = 100, trace = FALSE,tuneGrid = expand.grid(.size=sizes,.decay=decays ),preProcess = c("center", "scale"), trControl=trc,allowParallel=TRUE)
+  return(model.10x10CV)
+    
+}
+
+
+
+subject.get.method.resample.RBFNN<- function(subject,maxVar,trc)
+{
+  sizes <- 2*seq(1,10,by=1)
+  model.10x10CV <- caret::train (x= subject[,1:maxVar],y= subject[,(maxVar+1)], method='rbf', maxit = 100, trace = FALSE,preProcess = c("center", "scale"),tuneLength = 20, trControl=trc)
+  return(model.10x10CV)
+    
+  
+}
+
+subject.get.method.resample.RandomForest<- function(subject,maxVar,trc)
+{
+
+  model.10x10CV <- caret::train (x= subject[,1:maxVar],y= subject[,(maxVar+1)],method='parRF',preProcess = c("center", "scale"), maxit = 100, trace = FALSE, trControl=trc,tuneLength=20,allowParallel=TRUE)
+  return(model.10x10CV)
+  
+}
+
+subject.get.method.resample.RBFKernel<- function(subject,maxVar,trc)
+{
+  model.10x10CV <- caret::train (x= subject[,1:maxVar],y= subject[,(maxVar+1)],method='svmRadial', preProcess = c("center", "scale"),maxit = 100, trace = FALSE,tuneLength = 20, trControl=trc)
+  return(model.10x10CV)
+  
+}
+
+
+subject.resampling <- function(subject,nameSubject)
+{
+ 
+  maxVar <- dim(subject)[2]-1
+  subject[,(maxVar+1)] <- as.factor(subject[,(maxVar+1)])
+  learner <- subject.get.learner(subject,maxVar)
+  trainData <- subject[learner,]
+  number <-  3
+  tr <-subject.get.train(number)
+  for( numberMethod in 1:3){
+     subject.model <- subject.get.method(numberMethod,trainData,maxVar,tr)
+     
+     messageMethod <-subject.get.message.method(numberMethod)
+       messagePlot <- paste("Plot between the \n estimates of performance \n and the tuning parameters  \n using the method ", messageMethod, " for Subject ", nameSubject)
+     plt <- ggplot(subject.model) + ggtitle(messagePlot)
+     print(plt)
+     
+     message.from.BestTune<- subject.get.message.from.bestTune(numberMethod,subject.model$bestTune)
+     subject.error.TrainTest <-subject.resultsNN(subject,subject.model,maxVar,learner) 
+     
+     message <- paste(messageMethod, " with 10foldCV for sampling, the best parameter are ", message.from.BestTune, " with TrainTest resampling ", subject.error.TrainTest," for Subject ", nameSubject)
+     print(message)
+
+    }
+}
+```
+
+
+
+```{r}
+subject.resampling(subject3_psd.refactor,"3 using psd data")
+subject.resampling(subject2_psd.refactor,"2 using psd data")
+subject.resampling(subject1_psd.refactor,"1 using psd data")
+
+subject.resampling(subject3_raw,"3 using raw data")
+subject.resampling(subject2_raw,"2 using raw data")
+subject.resampling(subject1_raw,"1 using raw data")
+```
